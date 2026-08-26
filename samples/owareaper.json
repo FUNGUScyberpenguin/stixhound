@@ -1,0 +1,356 @@
+{
+  "type": "bundle",
+  "id": "bundle--a1f3c4d2-9e77-4b21-b8f0-5c7a1e2d3b40",
+  "objects": [
+    {
+      "type": "identity",
+      "spec_version": "2.1",
+      "id": "identity--0f1a2b3c-4d5e-6f70-8192-a3b4c5d6e7f8",
+      "created": "2026-03-02T14:00:00.000Z",
+      "modified": "2026-03-02T14:00:00.000Z",
+      "name": "Example Threat Research",
+      "identity_class": "organization"
+    },
+    {
+      "type": "intrusion-set",
+      "spec_version": "2.1",
+      "id": "intrusion-set--7c9e6a12-3b4d-4f58-9a01-2c3d4e5f6071",
+      "created_by_ref": "identity--0f1a2b3c-4d5e-6f70-8192-a3b4c5d6e7f8",
+      "created": "2026-03-02T14:00:00.000Z",
+      "modified": "2026-03-02T14:00:00.000Z",
+      "name": "TA488",
+      "description": "Financially motivated intrusion set targeting internet-facing mail infrastructure, pivoting into on-premises identity systems.",
+      "aliases": ["OWAReaper Operators"],
+      "goals": ["credential theft", "extortion"],
+      "resource_level": "organization",
+      "primary_motivation": "financial-gain",
+      "external_references": [
+        {
+          "source_name": "example-research",
+          "url": "https://example.invalid/reports/ta488"
+        }
+      ]
+    },
+    {
+      "type": "campaign",
+      "spec_version": "2.1",
+      "id": "campaign--1a2b3c4d-5e6f-4071-8293-a4b5c6d7e8f9",
+      "created": "2026-03-02T14:00:00.000Z",
+      "modified": "2026-03-02T14:00:00.000Z",
+      "name": "OWAReaper",
+      "description": "Campaign abusing exposed Outlook Web Access to harvest credentials, then escalating through Active Directory certificate services.",
+      "first_seen": "2025-11-04T00:00:00.000Z",
+      "objective": "Domain-wide credential access"
+    },
+    {
+      "type": "malware",
+      "spec_version": "2.1",
+      "id": "malware--2b3c4d5e-6f70-4182-93a4-b5c6d7e8f901",
+      "created": "2026-03-02T14:00:00.000Z",
+      "modified": "2026-03-02T14:00:00.000Z",
+      "name": "OWAReaper",
+      "description": "Managed IIS module that intercepts OWA form-based authentication and writes plaintext credentials to disk.",
+      "is_family": false,
+      "malware_types": ["credential-exploitation"],
+      "implementation_languages": ["c-sharp"]
+    },
+    {
+      "type": "tool",
+      "spec_version": "2.1",
+      "id": "tool--3c4d5e6f-7081-4293-a4b5-c6d7e8f90123",
+      "created": "2026-03-02T14:00:00.000Z",
+      "modified": "2026-03-02T14:00:00.000Z",
+      "name": "Certipy",
+      "description": "Open-source AD CS enumeration and abuse tool observed in operator hands.",
+      "tool_types": ["exploitation"]
+    },
+    {
+      "type": "vulnerability",
+      "spec_version": "2.1",
+      "id": "vulnerability--4d5e6f70-8192-43a4-b5c6-d7e8f9012345",
+      "created": "2026-03-02T14:00:00.000Z",
+      "modified": "2026-03-02T14:00:00.000Z",
+      "name": "CVE-2025-99999",
+      "description": "Authentication bypass in an internet-facing mail server component.",
+      "external_references": [
+        {"source_name": "cve", "external_id": "CVE-2025-99999"}
+      ]
+    },
+    {
+      "type": "infrastructure",
+      "spec_version": "2.1",
+      "id": "infrastructure--5e6f7081-92a3-44b5-c6d7-e8f901234567",
+      "created": "2026-03-02T14:00:00.000Z",
+      "modified": "2026-03-02T14:00:00.000Z",
+      "name": "OWAReaper C2 cluster",
+      "infrastructure_types": ["command-and-control"]
+    },
+    {
+      "type": "attack-pattern",
+      "spec_version": "2.1",
+      "id": "attack-pattern--6f708192-a3b4-45c6-d7e8-f90123456789",
+      "created": "2026-03-02T14:00:00.000Z",
+      "modified": "2026-03-02T14:00:00.000Z",
+      "name": "Exploit Public-Facing Application",
+      "external_references": [
+        {"source_name": "mitre-attack", "external_id": "T1190",
+         "url": "https://attack.mitre.org/techniques/T1190/"}
+      ],
+      "kill_chain_phases": [
+        {"kill_chain_name": "mitre-attack", "phase_name": "initial-access"}
+      ]
+    },
+    {
+      "type": "attack-pattern",
+      "spec_version": "2.1",
+      "id": "attack-pattern--708192a3-b4c5-46d7-e8f9-012345678901",
+      "created": "2026-03-02T14:00:00.000Z",
+      "modified": "2026-03-02T14:00:00.000Z",
+      "name": "Steal or Forge Authentication Certificates",
+      "external_references": [
+        {"source_name": "mitre-attack", "external_id": "T1649",
+         "url": "https://attack.mitre.org/techniques/T1649/"}
+      ],
+      "kill_chain_phases": [
+        {"kill_chain_name": "mitre-attack", "phase_name": "credential-access"}
+      ]
+    },
+    {
+      "type": "attack-pattern",
+      "spec_version": "2.1",
+      "id": "attack-pattern--8192a3b4-c5d6-47e8-f901-234567890123",
+      "created": "2026-03-02T14:00:00.000Z",
+      "modified": "2026-03-02T14:00:00.000Z",
+      "name": "DCSync",
+      "external_references": [
+        {"source_name": "mitre-attack", "external_id": "T1003.006",
+         "url": "https://attack.mitre.org/techniques/T1003/006/"}
+      ],
+      "kill_chain_phases": [
+        {"kill_chain_name": "mitre-attack", "phase_name": "credential-access"}
+      ]
+    },
+    {
+      "type": "attack-pattern",
+      "spec_version": "2.1",
+      "id": "attack-pattern--92a3b4c5-d6e7-48f9-0123-456789012345",
+      "created": "2026-03-02T14:00:00.000Z",
+      "modified": "2026-03-02T14:00:00.000Z",
+      "name": "Remote Services: SMB/Windows Admin Shares",
+      "external_references": [
+        {"source_name": "mitre-attack", "external_id": "T1021.002"}
+      ],
+      "kill_chain_phases": [
+        {"kill_chain_name": "mitre-attack", "phase_name": "lateral-movement"}
+      ]
+    },
+    {
+      "type": "attack-pattern",
+      "spec_version": "2.1",
+      "id": "attack-pattern--a3b4c5d6-e7f9-4012-3456-789012345678",
+      "created": "2026-03-02T14:00:00.000Z",
+      "modified": "2026-03-02T14:00:00.000Z",
+      "name": "Obfuscated Files or Information",
+      "external_references": [
+        {"source_name": "mitre-attack", "external_id": "T1027"}
+      ],
+      "kill_chain_phases": [
+        {"kill_chain_name": "mitre-attack", "phase_name": "defense-evasion"}
+      ]
+    },
+    {
+      "type": "attack-pattern",
+      "spec_version": "2.1",
+      "id": "attack-pattern--b4c5d6e7-f901-4234-5678-901234567890",
+      "created": "2026-03-02T14:00:00.000Z",
+      "modified": "2026-03-02T14:00:00.000Z",
+      "name": "Account Manipulation",
+      "external_references": [
+        {"source_name": "mitre-attack", "external_id": "T1098"}
+      ],
+      "kill_chain_phases": [
+        {"kill_chain_name": "mitre-attack", "phase_name": "persistence"}
+      ]
+    },
+    {
+      "type": "course-of-action",
+      "spec_version": "2.1",
+      "id": "course-of-action--c5d6e7f9-0123-4456-7890-123456789012",
+      "created": "2026-03-02T14:00:00.000Z",
+      "modified": "2026-03-02T14:00:00.000Z",
+      "name": "Enforce phishing-resistant MFA on external mail access",
+      "description": "Form-based authentication on internet-facing OWA is the enabling condition for the entire intrusion. Phishing-resistant MFA removes the harvested credential's value."
+    },
+    {
+      "type": "course-of-action",
+      "spec_version": "2.1",
+      "id": "course-of-action--d6e7f901-2345-4678-9012-345678901234",
+      "created": "2026-03-02T14:00:00.000Z",
+      "modified": "2026-03-02T14:00:00.000Z",
+      "name": "Restrict AD CS template enrollment rights",
+      "description": "Remove enrollee-supplies-subject on templates enrollable by low-privilege principals."
+    },
+    {
+      "type": "identity",
+      "spec_version": "2.1",
+      "id": "identity--e7f90123-4567-4890-1234-567890123456",
+      "created": "2026-03-02T14:00:00.000Z",
+      "modified": "2026-03-02T14:00:00.000Z",
+      "name": "Regional healthcare providers",
+      "identity_class": "class",
+      "sectors": ["healthcare"]
+    },
+    {
+      "type": "indicator",
+      "spec_version": "2.1",
+      "id": "indicator--f9012345-6789-4012-3456-789012345678",
+      "created": "2026-03-02T14:00:00.000Z",
+      "modified": "2026-03-02T14:00:00.000Z",
+      "name": "OWAReaper C2 domain",
+      "pattern": "[domain-name:value = 'mail-update.example.invalid']",
+      "pattern_type": "stix",
+      "valid_from": "2026-03-02T14:00:00.000Z"
+    },
+    {
+      "type": "relationship",
+      "spec_version": "2.1",
+      "id": "relationship--11111111-0000-4000-8000-000000000001",
+      "created": "2026-03-02T14:00:00.000Z",
+      "modified": "2026-03-02T14:00:00.000Z",
+      "relationship_type": "attributed-to",
+      "source_ref": "campaign--1a2b3c4d-5e6f-4071-8293-a4b5c6d7e8f9",
+      "target_ref": "intrusion-set--7c9e6a12-3b4d-4f58-9a01-2c3d4e5f6071"
+    },
+    {
+      "type": "relationship",
+      "spec_version": "2.1",
+      "id": "relationship--11111111-0000-4000-8000-000000000002",
+      "created": "2026-03-02T14:00:00.000Z",
+      "modified": "2026-03-02T14:00:00.000Z",
+      "relationship_type": "uses",
+      "source_ref": "intrusion-set--7c9e6a12-3b4d-4f58-9a01-2c3d4e5f6071",
+      "target_ref": "malware--2b3c4d5e-6f70-4182-93a4-b5c6d7e8f901"
+    },
+    {
+      "type": "relationship",
+      "spec_version": "2.1",
+      "id": "relationship--11111111-0000-4000-8000-000000000003",
+      "created": "2026-03-02T14:00:00.000Z",
+      "modified": "2026-03-02T14:00:00.000Z",
+      "relationship_type": "uses",
+      "source_ref": "intrusion-set--7c9e6a12-3b4d-4f58-9a01-2c3d4e5f6071",
+      "target_ref": "tool--3c4d5e6f-7081-4293-a4b5-c6d7e8f90123"
+    },
+    {
+      "type": "relationship",
+      "spec_version": "2.1",
+      "id": "relationship--11111111-0000-4000-8000-000000000004",
+      "created": "2026-03-02T14:00:00.000Z",
+      "modified": "2026-03-02T14:00:00.000Z",
+      "relationship_type": "uses",
+      "source_ref": "intrusion-set--7c9e6a12-3b4d-4f58-9a01-2c3d4e5f6071",
+      "target_ref": "attack-pattern--6f708192-a3b4-45c6-d7e8-f90123456789",
+      "description": "Initial access via authentication bypass on internet-facing OWA."
+    },
+    {
+      "type": "relationship",
+      "spec_version": "2.1",
+      "id": "relationship--11111111-0000-4000-8000-000000000005",
+      "created": "2026-03-02T14:00:00.000Z",
+      "modified": "2026-03-02T14:00:00.000Z",
+      "relationship_type": "uses",
+      "source_ref": "intrusion-set--7c9e6a12-3b4d-4f58-9a01-2c3d4e5f6071",
+      "target_ref": "attack-pattern--708192a3-b4c5-46d7-e8f9-012345678901"
+    },
+    {
+      "type": "relationship",
+      "spec_version": "2.1",
+      "id": "relationship--11111111-0000-4000-8000-000000000006",
+      "created": "2026-03-02T14:00:00.000Z",
+      "modified": "2026-03-02T14:00:00.000Z",
+      "relationship_type": "uses",
+      "source_ref": "intrusion-set--7c9e6a12-3b4d-4f58-9a01-2c3d4e5f6071",
+      "target_ref": "attack-pattern--8192a3b4-c5d6-47e8-f901-234567890123"
+    },
+    {
+      "type": "relationship",
+      "spec_version": "2.1",
+      "id": "relationship--11111111-0000-4000-8000-000000000007",
+      "created": "2026-03-02T14:00:00.000Z",
+      "modified": "2026-03-02T14:00:00.000Z",
+      "relationship_type": "uses",
+      "source_ref": "intrusion-set--7c9e6a12-3b4d-4f58-9a01-2c3d4e5f6071",
+      "target_ref": "attack-pattern--92a3b4c5-d6e7-48f9-0123-456789012345"
+    },
+    {
+      "type": "relationship",
+      "spec_version": "2.1",
+      "id": "relationship--11111111-0000-4000-8000-000000000008",
+      "created": "2026-03-02T14:00:00.000Z",
+      "modified": "2026-03-02T14:00:00.000Z",
+      "relationship_type": "uses",
+      "source_ref": "intrusion-set--7c9e6a12-3b4d-4f58-9a01-2c3d4e5f6071",
+      "target_ref": "attack-pattern--a3b4c5d6-e7f9-4012-3456-789012345678"
+    },
+    {
+      "type": "relationship",
+      "spec_version": "2.1",
+      "id": "relationship--11111111-0000-4000-8000-000000000009",
+      "created": "2026-03-02T14:00:00.000Z",
+      "modified": "2026-03-02T14:00:00.000Z",
+      "relationship_type": "uses",
+      "source_ref": "intrusion-set--7c9e6a12-3b4d-4f58-9a01-2c3d4e5f6071",
+      "target_ref": "attack-pattern--b4c5d6e7-f901-4234-5678-901234567890"
+    },
+    {
+      "type": "relationship",
+      "spec_version": "2.1",
+      "id": "relationship--11111111-0000-4000-8000-000000000010",
+      "created": "2026-03-02T14:00:00.000Z",
+      "modified": "2026-03-02T14:00:00.000Z",
+      "relationship_type": "exploits",
+      "source_ref": "intrusion-set--7c9e6a12-3b4d-4f58-9a01-2c3d4e5f6071",
+      "target_ref": "vulnerability--4d5e6f70-8192-43a4-b5c6-d7e8f9012345"
+    },
+    {
+      "type": "relationship",
+      "spec_version": "2.1",
+      "id": "relationship--11111111-0000-4000-8000-000000000011",
+      "created": "2026-03-02T14:00:00.000Z",
+      "modified": "2026-03-02T14:00:00.000Z",
+      "relationship_type": "targets",
+      "source_ref": "campaign--1a2b3c4d-5e6f-4071-8293-a4b5c6d7e8f9",
+      "target_ref": "identity--e7f90123-4567-4890-1234-567890123456"
+    },
+    {
+      "type": "relationship",
+      "spec_version": "2.1",
+      "id": "relationship--11111111-0000-4000-8000-000000000012",
+      "created": "2026-03-02T14:00:00.000Z",
+      "modified": "2026-03-02T14:00:00.000Z",
+      "relationship_type": "communicates-with",
+      "source_ref": "malware--2b3c4d5e-6f70-4182-93a4-b5c6d7e8f901",
+      "target_ref": "infrastructure--5e6f7081-92a3-44b5-c6d7-e8f901234567"
+    },
+    {
+      "type": "relationship",
+      "spec_version": "2.1",
+      "id": "relationship--11111111-0000-4000-8000-000000000013",
+      "created": "2026-03-02T14:00:00.000Z",
+      "modified": "2026-03-02T14:00:00.000Z",
+      "relationship_type": "mitigates",
+      "source_ref": "course-of-action--c5d6e7f9-0123-4456-7890-123456789012",
+      "target_ref": "attack-pattern--6f708192-a3b4-45c6-d7e8-f90123456789"
+    },
+    {
+      "type": "relationship",
+      "spec_version": "2.1",
+      "id": "relationship--11111111-0000-4000-8000-000000000014",
+      "created": "2026-03-02T14:00:00.000Z",
+      "modified": "2026-03-02T14:00:00.000Z",
+      "relationship_type": "mitigates",
+      "source_ref": "course-of-action--d6e7f901-2345-4678-9012-345678901234",
+      "target_ref": "attack-pattern--708192a3-b4c5-46d7-e8f9-012345678901"
+    }
+  ]
+}
