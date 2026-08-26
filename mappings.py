@@ -10,7 +10,14 @@ Map 3 is the interesting one. It is the join between "what the adversary
 did somewhere else" and "what is structurally possible in your environment."
 It is deliberately incomplete and opinionated - tune it against your own
 data before trusting it.
+
+Read map 3 through `technique_edges()` rather than indexing it directly: the
+sub-technique -> parent fallback (T1003.006 -> T1003) lives there, and having
+it in one place is what keeps the converter, the Cypher generator and the
+summary from drifting apart.
 """
+
+from functools import lru_cache
 
 # ---------------------------------------------------------------------------
 # 1. STIX SDO type -> OpenGraph node kind
@@ -40,7 +47,8 @@ STIX_TYPE_KINDS = {
 
 # STIX types that are structural rather than narrative. Skipped by default
 # because they add volume without adding shape to the intrusion story.
-NOISY_TYPES = {"indicator", "observed-data", "note", "opinion", "marking-definition"}
+NOISY_TYPES = frozenset({"indicator", "observed-data", "note", "opinion",
+                         "marking-definition"})
 
 # ---------------------------------------------------------------------------
 # 2. STIX relationship_type -> OpenGraph edge kind
@@ -162,6 +170,33 @@ TECHNIQUE_EDGE_MAP = {
     ],
     "T1136.003": ["AZAddOwner", "AZAddSecret"],
 }
+
+# Normalised once at import: de-duplicated and sorted, so callers never have to
+# sort per lookup and the ordering of the literal above cannot leak into output.
+_TECHNIQUE_EDGES: dict[str, tuple[str, ...]] = {
+    tid: tuple(sorted(set(edges))) for tid, edges in TECHNIQUE_EDGE_MAP.items()
+}
+
+
+@lru_cache(maxsize=None)
+def technique_edges(technique_id: str | None) -> tuple[str, ...]:
+    """
+    BloodHound edge kinds for an ATT&CK technique, sorted, or () if none.
+
+    Falls back from a sub-technique to its parent, so T1003.006 resolves
+    through its own entry and T1021.004 resolves through T1021 if only the
+    parent is mapped. This is the single definition of "is this technique
+    structurally mappable" - the converter, the Cypher and the coverage
+    percentage all have to agree, and they only do if they ask here.
+    """
+    if not technique_id:
+        return ()
+    edges = _TECHNIQUE_EDGES.get(technique_id)
+    if not edges:
+        base = technique_id.partition(".")[0]
+        edges = _TECHNIQUE_EDGES.get(base, ())
+    return edges
+
 
 # Node kind -> Font Awesome icon + colour, for the /api/v2/custom-nodes endpoint.
 ICONS = {

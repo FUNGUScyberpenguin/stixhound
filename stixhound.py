@@ -27,6 +27,7 @@ import pathlib
 import re
 import sys
 from collections import Counter, OrderedDict
+from functools import lru_cache
 
 from mappings import (
     EMBEDDED_REF_KINDS,
@@ -34,29 +35,55 @@ from mappings import (
     NOISY_TYPES,
     RELATIONSHIP_KINDS,
     STIX_TYPE_KINDS,
-    TECHNIQUE_EDGE_MAP,
+    technique_edges,
 )
 
 KIND_RE = re.compile(r"^[A-Za-z0-9_]+$")
+NON_ALNUM_RE = re.compile(r"[^A-Za-z0-9]+")
+
+# OpenGraph reserves this prefix on kind names.
+RESERVED_KIND_PREFIX = "tag_"
+
+# Hop bound on the generated Tier Zero path query. Unbounded variable-length
+# shortestPath is the single most expensive thing this tool can emit.
+DEFAULT_MAX_HOPS = 6
 
 # Properties that are noise, huge, or structurally handled elsewhere.
-SKIP_PROPS = {
+SKIP_PROPS = frozenset({
     "id", "type", "spec_version", "created_by_ref", "object_marking_refs",
     "granular_markings", "extensions", "object_refs", "sample_refs",
     "analysis_sco_refs", "host_vm_ref", "operating_system_ref",
     "external_references", "kill_chain_phases", "relationship_type",
     "source_ref", "target_ref", "defanged", "revoked",
-}
+})
+
+# external_references source_name values that carry an ATT&CK ID.
+ATTACK_SOURCES = frozenset({
+    "mitre-attack", "mitre-pre-attack", "mitre-mobile-attack",
+    "mitre-ics-attack",
+})
+
+# Embedded refs that actually produce edges, resolved once instead of
+# re-filtering the None entries for every object in the bundle.
+EMBEDDED_REF_EDGES = tuple(
+    (prop, kind) for prop, kind in EMBEDDED_REF_KINDS.items() if kind
+)
 
 
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
+@lru_cache(maxsize=4096)
 def camel(value: str) -> str:
     """Turn an arbitrary STIX verb into a legal OpenGraph edge kind."""
-    parts = re.split(r"[^A-Za-z0-9]+", value)
+    parts = NON_ALNUM_RE.split(value)
     out = "".join(p[:1].upper() + p[1:] for p in parts if p)
     return out or "RelatedTo"
+
+
+def legal_kind(kind: str) -> bool:
+    """OpenGraph kinds must match ^[A-Za-z0-9_]+$ and not claim `tag_`."""
+    return bool(KIND_RE.match(kind)) and not kind.startswith(RESERVED_KIND_PREFIX)
 
 
 def flatten(value):
@@ -71,15 +98,23 @@ def flatten(value):
     if isinstance(value, list):
         if not value:
             return None
-        prims = [v for v in value if isinstance(v, (str, int, float, bool))]
-        if len(prims) == len(value):
-            # homogenise - mixed-type arrays are rejected by the ingest
-            if all(isinstance(v, bool) for v in prims):
-                return prims
-            if all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in prims):
-                return prims
-            return [str(v) for v in prims]
-        return json.dumps(value, sort_keys=True)
+        # One pass, classifying as we go. The old version built an
+        # intermediate list and then walked it up to three more times.
+        all_bool = all_num = all_str = True
+        for item in value:
+            if isinstance(item, bool):
+                all_num = all_str = False
+            elif isinstance(item, (int, float)):
+                all_bool = all_str = False
+            elif isinstance(item, str):
+                all_bool = all_num = False
+            else:
+                # a non-primitive anywhere makes the whole array unusable
+                return json.dumps(value, sort_keys=True)
+        if all_bool or all_num or all_str:
+            return value
+        # mixed primitive types - the ingest rejects those, so stringify
+        return [str(v) for v in value]
     if isinstance(value, dict):
         return json.dumps(value, sort_keys=True)
     return str(value)
@@ -88,16 +123,47 @@ def flatten(value):
 def attack_id(obj: dict) -> str | None:
     """Pull the ATT&CK technique/group ID out of external_references."""
     for ref in obj.get("external_references", []) or []:
-        if ref.get("source_name") in ("mitre-attack", "mitre-pre-attack",
-                                      "mitre-mobile-attack", "mitre-ics-attack"):
+        if isinstance(ref, dict) and ref.get("source_name") in ATTACK_SOURCES:
             ext = ref.get("external_id")
             if ext:
                 return ext
     return None
 
 
+def _prop_key(props: dict) -> tuple:
+    """
+    Hashable identity for an edge's properties, for exact-duplicate checks.
+
+    The fast path is just the items tuple, which is what every call site
+    actually produces - edge properties are built in a fixed order per call
+    site and flatten() yields primitives. Sorting and normalising costs about
+    a third of total conversion time on a large bundle, so it is kept as the
+    fallback for the array-valued case rather than paid for on every edge.
+    """
+    items = tuple(props.items())
+    try:
+        hash(items)
+    except TypeError:
+        return tuple(sorted(
+            (k, tuple(v) if isinstance(v, list) else v) for k, v in props.items()
+        ))
+    return items
+
+
+def cypher_str(value: str) -> str:
+    """Escape a value for use inside a single-quoted Cypher string literal."""
+    return str(value).replace("\\", "\\\\").replace("'", "\\'")
+
+
+def cypher_comment(value: str) -> str:
+    """Keep untrusted CTI text on one line so it cannot escape a `//` comment."""
+    return " ".join(str(value).split())
+
+
 def primary_source(obj: dict) -> str | None:
     for ref in obj.get("external_references", []) or []:
+        if not isinstance(ref, dict):
+            continue
         name = ref.get("source_name")
         if name and not str(name).startswith("mitre"):
             return ref.get("url") or name
@@ -118,8 +184,22 @@ class Converter:
         self.nodes: "OrderedDict[str, dict]" = OrderedDict()
         self.edges: list[dict] = []
         self.techniques: "OrderedDict[str, str]" = OrderedDict()  # attack_id -> name
-        self.warnings: list[str] = []
+        # Techniques with a structural BloodHound equivalent. Tracked as we go
+        # so the coverage number is never recomputed from a second scan and
+        # cannot disagree with the `graph_mappable` property on the nodes.
+        self.mappable: set[str] = set()
+        # A malformed bundle can produce one warning per object; dedupe on the
+        # way in so a 100k-object bundle cannot grow a 100k-entry list.
+        self.warnings: "OrderedDict[str, None]" = OrderedDict()
         self.skipped = Counter()
+        self.duplicates = Counter()
+        # (kind, start, end, props) of every edge emitted, to drop exact
+        # duplicates. STIX bundles legitimately repeat objects across versions,
+        # and each repeat re-emits the same embedded-ref edges.
+        self._edge_keys: set = set()
+
+    def warn(self, message: str) -> None:
+        self.warnings[message] = None
 
     # -- nodes ------------------------------------------------------------
     def add_object(self, obj: dict) -> None:
@@ -138,10 +218,10 @@ class Converter:
             kind = "Author"
         if kind is None:
             kind = camel(stix_type or "Unknown")
-            self.warnings.append(f"unmapped STIX type '{stix_type}' -> kind '{kind}'")
-        if not KIND_RE.match(kind):
+            self.warn(f"unmapped STIX type '{stix_type}' -> kind '{kind}'")
+        if not legal_kind(kind):
             self.skipped[stix_type] += 1
-            self.warnings.append(f"illegal kind derived from '{stix_type}', skipped")
+            self.warn(f"illegal kind derived from '{stix_type}', skipped")
             return
 
         props: dict = {}
@@ -158,10 +238,11 @@ class Converter:
             if stix_type == "attack-pattern":
                 self.techniques[tid] = obj.get("name", tid)
                 # does this technique have a structural equivalent in BH?
-                mapped = TECHNIQUE_EDGE_MAP.get(tid) or TECHNIQUE_EDGE_MAP.get(tid.split(".")[0])
+                mapped = technique_edges(tid)
                 props["graph_mappable"] = bool(mapped)
                 if mapped:
-                    props["bloodhound_edges"] = sorted(mapped)
+                    props["bloodhound_edges"] = list(mapped)
+                    self.mappable.add(tid)
 
         src = primary_source(obj)
         if src:
@@ -177,21 +258,26 @@ class Converter:
         props["cti_source"] = self.source_kind
 
         # First kind drives the icon in the BloodHound UI. Max 3 kinds.
-        self.nodes[obj["id"]] = {
-            "id": obj["id"],
+        node_id = obj["id"]
+        if node_id in self.nodes:
+            # STIX bundles carry object versions; last one wins, as before.
+            self.duplicates[stix_type] += 1
+        self.nodes[node_id] = {
+            "id": node_id,
             "kinds": [kind, "CTI"],
             "properties": props,
         }
 
         # embedded refs behave like relationships
-        for prop, edge_kind in EMBEDDED_REF_KINDS.items():
-            if edge_kind is None or prop not in obj:
+        for prop, edge_kind in EMBEDDED_REF_EDGES:
+            targets = obj.get(prop)
+            if targets is None:
                 continue
-            targets = obj[prop]
-            targets = targets if isinstance(targets, list) else [targets]
+            if not isinstance(targets, list):
+                targets = [targets]
             for target in targets:
                 if isinstance(target, str):
-                    self._edge(obj["id"], target, edge_kind, {"embedded": True})
+                    self._edge(node_id, target, edge_kind, {"embedded": True})
 
     def _add_sighting(self, obj: dict) -> None:
         ref = obj.get("sighting_of_ref")
@@ -205,9 +291,12 @@ class Converter:
     # -- edges ------------------------------------------------------------
     def add_relationship(self, obj: dict) -> None:
         verb = obj.get("relationship_type", "related-to")
+        if not isinstance(verb, str):
+            self.warn(f"non-string relationship_type {verb!r}, skipped")
+            return
         kind = RELATIONSHIP_KINDS.get(verb) or camel(verb)
-        if not KIND_RE.match(kind) or kind.startswith("tag_"):
-            self.warnings.append(f"illegal edge kind from '{verb}', skipped")
+        if not legal_kind(kind):
+            self.warn(f"illegal edge kind from '{verb}', skipped")
             return
         props = {}
         for key in ("description", "start_time", "stop_time", "confidence", "created"):
@@ -220,6 +309,10 @@ class Converter:
             return
         props = {k: v for k, v in props.items() if v is not None}
         props["cti_source"] = self.source_kind
+        key = (kind, start, end, _prop_key(props))
+        if key in self._edge_keys:
+            return
+        self._edge_keys.add(key)
         self.edges.append({
             "kind": kind,
             "start": {"value": start, "match_by": "id"},
@@ -232,7 +325,7 @@ class Converter:
         """Drop edges whose endpoints were filtered out. Ingest accepts them
         silently but they produce isolated edges you cannot see."""
         before = len(self.edges)
-        ids = set(self.nodes)
+        ids = self.nodes.keys()
         self.edges = [e for e in self.edges
                       if e["start"]["value"] in ids and e["end"]["value"] in ids]
         return before - len(self.edges)
@@ -258,10 +351,16 @@ class Converter:
 # ---------------------------------------------------------------------------
 # the join layer
 # ---------------------------------------------------------------------------
-def build_cypher(techniques: dict[str, str], source_kind: str) -> str:
+def build_cypher(techniques: dict[str, str], source_kind: str,
+                 max_hops: int = DEFAULT_MAX_HOPS) -> str:
     """
     Generate queries that ask the environment graph whether the tradecraft
     described in the CTI bundle is structurally possible here.
+
+    `max_hops` bounds the variable-length path in query 3. Leave it bounded:
+    an unbounded `*1..` shortestPath over a real AD graph is the difference
+    between a query that answers and a query that times out. 0 removes the
+    bound if you really want it.
     """
     lines = [
         f"// ===================================================================",
@@ -272,14 +371,14 @@ def build_cypher(techniques: dict[str, str], source_kind: str) -> str:
         "// -- 1. Which of this actor's techniques exist in my environment? ---",
     ]
 
-    mapped: list[tuple[str, str, list[str]]] = []
+    mapped: list[tuple[str, str, tuple[str, ...]]] = []
     unmapped: list[tuple[str, str]] = []
     for tid, name in techniques.items():
-        edges = TECHNIQUE_EDGE_MAP.get(tid) or TECHNIQUE_EDGE_MAP.get(tid.split(".")[0])
+        edges = technique_edges(tid)
         if edges:
-            mapped.append((tid, name, sorted(edges)))
+            mapped.append((tid, cypher_comment(name), edges))
         else:
-            unmapped.append((tid, name))
+            unmapped.append((tid, cypher_comment(name)))
 
     if not mapped:
         lines += ["// No techniques in this bundle map to structural graph edges.",
@@ -296,6 +395,18 @@ def build_cypher(techniques: dict[str, str], source_kind: str) -> str:
     if mapped:
         all_edges = sorted({e for _, _, es in mapped for e in es})
         rel = "|".join(all_edges)
+        if max_hops > 0:
+            hops = f"*1..{max_hops}"
+            hop_note = [
+                f"//     Bounded to {max_hops} hops (--max-hops). An unbounded",
+                "//     variable-length search will not return on a large graph.",
+            ]
+        else:
+            hops = "*1.."
+            hop_note = [
+                "//     UNBOUNDED path length. Expect this to be slow, or to not",
+                "//     return at all on a production-sized graph.",
+            ]
         lines += [
             "// -- 2. Full tradecraft overlay: every edge this actor could use ----",
             f"MATCH p = (s)-[r:{rel}]->(t)",
@@ -304,9 +415,12 @@ def build_cypher(techniques: dict[str, str], source_kind: str) -> str:
             "// -- 3. Actor tradecraft that reaches Tier Zero ---------------------",
             "//     This is the question worth answering. Everything above is",
             "//     inventory; this is exposure.",
-            f"MATCH p = shortestPath((s)-[r:{rel}*1..]->(t))",
-            "WHERE COALESCE(t.system_tags, '') CONTAINS 'admin_tier_0'",
-            "  AND s <> t",
+            *hop_note,
+            "//     Anchor on Tier Zero first so the variable-length expansion",
+            "//     starts from a small set rather than the whole graph.",
+            "MATCH (t) WHERE COALESCE(t.system_tags, '') CONTAINS 'admin_tier_0'",
+            f"MATCH p = shortestPath((s)-[r:{rel}{hops}]->(t))",
+            "WHERE s <> t",
             "RETURN p LIMIT 250",
             "",
             "// -- 4. Count exposure per technique --------------------------------",
@@ -316,19 +430,19 @@ def build_cypher(techniques: dict[str, str], source_kind: str) -> str:
             lines += [
                 f"// {tid} - {name}",
                 f"MATCH (s)-[r:{rel_i}]->(t)",
-                f"RETURN '{tid}' AS technique, COUNT(r) AS edge_count",
+                f"RETURN '{cypher_str(tid)}' AS technique, COUNT(r) AS edge_count",
                 "",
             ]
 
     lines += [
         "// -- 5. The CTI subgraph itself (what the bundle described) ---------",
         f"MATCH p = (n:CTI)-[r]->(m:CTI)",
-        f"WHERE n.cti_source = '{source_kind}'",
+        f"WHERE n.cti_source = '{cypher_str(source_kind)}'",
         "RETURN p LIMIT 500",
         "",
         "// -- 6. Controls the reporting says would mitigate this --------------",
         "MATCH p = (c:Control)-[:Mitigates]->(a:AttackPattern)",
-        f"WHERE a.cti_source = '{source_kind}'",
+        f"WHERE a.cti_source = '{cypher_str(source_kind)}'",
         "RETURN p",
         "",
     ]
@@ -372,13 +486,20 @@ def build_summary(conv: Converter, mapped_n: int, dangling: int, name: str) -> s
         out += ["", "## Skipped (noise filter)", ""]
         for stype, count in conv.skipped.most_common():
             out.append(f"- `{stype}` x{count} - re-run with `--include-noisy` to keep")
+    if conv.duplicates:
+        total_dupes = sum(conv.duplicates.values())
+        out += ["", f"## Re-declared {total_dupes} object(s)", "",
+                "The bundle carried the same STIX id more than once. The last",
+                "declaration won, which is the STIX versioning convention.", ""]
+        for stype, count in conv.duplicates.most_common():
+            out.append(f"- `{stype}` x{count}")
     if dangling:
         out += ["", f"## Pruned {dangling} dangling edge(s)",
                 "", "Endpoints were filtered out. OpenGraph accepts these silently but",
                 "they create isolated edges you cannot see in the UI."]
     if conv.warnings:
         out += ["", "## Warnings", ""]
-        for warn in sorted(set(conv.warnings)):
+        for warn in sorted(conv.warnings):
             out.append(f"- {warn}")
 
     out += [
@@ -398,25 +519,41 @@ def build_summary(conv: Converter, mapped_n: int, dangling: int, name: str) -> s
 
 # ---------------------------------------------------------------------------
 def convert(bundle: dict, source_kind: str, include_noisy: bool) -> Converter:
+    # A bundle is a JSON object. Anything else - a bare array, a string, a
+    # number - is not STIX, and saying so beats an AttributeError.
+    if not isinstance(bundle, dict):
+        raise ValueError(
+            f"expected a STIX bundle object, got {type(bundle).__name__}")
+
     objects = bundle.get("objects")
     if objects is None:
         objects = [bundle] if bundle.get("type") else []
+    elif not isinstance(objects, list):
+        raise ValueError("bundle 'objects' must be an array")
     if not objects:
         raise ValueError("no STIX objects found - is this a bundle?")
 
-    author_ids = {
-        obj["created_by_ref"] for obj in objects
-        if isinstance(obj, dict) and isinstance(obj.get("created_by_ref"), str)
-    }
+    # One pass to collect the author identities and split SDOs from SROs.
+    # Relationships have to be applied after the nodes exist, but the bundle
+    # itself only needs walking once.
+    author_ids: set[str] = set()
+    sdos: list[dict] = []
+    sros: list[dict] = []
+    for obj in objects:
+        if not isinstance(obj, dict):
+            continue
+        author = obj.get("created_by_ref")
+        if isinstance(author, str):
+            author_ids.add(author)
+        if "id" not in obj:
+            continue
+        (sros if obj.get("type") == "relationship" else sdos).append(obj)
 
     conv = Converter(source_kind, include_noisy, author_ids)
-    for obj in objects:
-        if not isinstance(obj, dict) or "id" not in obj:
-            continue
+    for obj in sdos:
         conv.add_object(obj)
-    for obj in objects:
-        if isinstance(obj, dict) and obj.get("type") == "relationship":
-            conv.add_relationship(obj)
+    for obj in sros:
+        conv.add_relationship(obj)
     return conv
 
 
@@ -429,7 +566,18 @@ def main() -> int:
                     help="OpenGraph metadata.source_kind tag (default: derived from filename)")
     ap.add_argument("--include-noisy", action="store_true",
                     help="keep indicators, observed-data and notes")
+    ap.add_argument("--max-hops", type=int, default=DEFAULT_MAX_HOPS, metavar="N",
+                    help=f"hop bound on the Tier Zero path query "
+                         f"(default {DEFAULT_MAX_HOPS}; 0 for unbounded)")
+    ap.add_argument("--indent", type=int, default=None, metavar="N",
+                    help="pretty-print the OpenGraph payload with N-space indent. "
+                         "Off by default: the payload is uploaded, not read, and "
+                         "indenting a large one costs far more than it is worth.")
     args = ap.parse_args()
+
+    if args.max_hops < 0:
+        print("error: --max-hops must be 0 or greater", file=sys.stderr)
+        return 1
 
     path = pathlib.Path(args.bundle)
     if not path.exists():
@@ -440,6 +588,12 @@ def main() -> int:
         bundle = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         print(f"error: {path} is not valid JSON: {exc}", file=sys.stderr)
+        return 1
+    except UnicodeDecodeError as exc:
+        print(f"error: {path} is not UTF-8 text: {exc}", file=sys.stderr)
+        return 1
+    except OSError as exc:
+        print(f"error: cannot read {path}: {exc}", file=sys.stderr)
         return 1
 
     stem = path.stem.replace(".", "_")
@@ -452,21 +606,19 @@ def main() -> int:
         return 1
 
     dangling = conv.prune_dangling()
-
-    mapped_n = sum(
-        1 for tid in conv.techniques
-        if TECHNIQUE_EDGE_MAP.get(tid) or TECHNIQUE_EDGE_MAP.get(tid.split(".")[0])
-    )
+    mapped_n = len(conv.mappable)
 
     outdir = pathlib.Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    (outdir / f"{stem}.opengraph.json").write_text(
-        json.dumps(conv.payload(), indent=2), encoding="utf-8")
+    payload_kwargs = ({"indent": args.indent} if args.indent is not None
+                      else {"separators": (",", ":")})
+    with (outdir / f"{stem}.opengraph.json").open("w", encoding="utf-8") as fh:
+        json.dump(conv.payload(), fh, **payload_kwargs)
     (outdir / f"{stem}.customnodes.json").write_text(
         json.dumps(conv.custom_nodes(), indent=2), encoding="utf-8")
     (outdir / f"{stem}.cypher").write_text(
-        build_cypher(conv.techniques, source_kind), encoding="utf-8")
+        build_cypher(conv.techniques, source_kind, args.max_hops), encoding="utf-8")
     (outdir / f"{stem}.summary.md").write_text(
         build_summary(conv, mapped_n, dangling, stem), encoding="utf-8")
 

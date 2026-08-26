@@ -30,6 +30,26 @@ Options:
 | `-o, --outdir` | output directory (default `out`) |
 | `-s, --source-kind` | `metadata.source_kind` tag (default: derived from filename) |
 | `--include-noisy` | keep indicators, observed-data, notes (dropped by default) |
+| `--max-hops` | hop bound on the Tier Zero path query (default 6, `0` for unbounded) |
+| `--indent` | pretty-print the OpenGraph payload (off by default) |
+
+The payload is written compact, because it gets POSTed rather than read.
+Pass `--indent 2` when you want to eyeball it — on a 16k-object bundle that
+measured ~5x the serialisation time and ~65% more bytes.
+
+## Tests
+
+```bash
+python -m unittest discover        # standard library, no dependencies
+pytest tests/                      # also works
+```
+
+The suite covers property flattening against the OpenGraph value rules, the
+mapping tables, edge and node construction, the generated Cypher, and
+end-to-end CLI runs including the failure modes. `tests/test_mappings.py`
+pins the deliberate compromises documented below, so narrowing `T1098` or
+removing the `HasSPNConfigured` marker fails a test rather than happening
+quietly.
 
 ## Uploading
 
@@ -110,7 +130,10 @@ before an intrusion, which is the whole argument.
   a property-based query, not an edge match.
 - **Tier Zero detection uses `system_tags CONTAINS 'admin_tier_0'`**, which
   is the BloodHound convention but varies by version and by whether you've
-  customised Tier Zero. Check query #3 before relying on it.
+  customised Tier Zero. Check query #3 before relying on it. That query is
+  bounded to 6 hops by default; an unbounded variable-length `shortestPath`
+  over a real AD graph generally does not return. Raise or remove the bound
+  with `--max-hops` if you know what you are asking for.
 - **Prose-to-graph is lossy and human.** Deciding that "moved laterally using
   a compromised service account" means `AdminTo` rather than `CanPSRemote` is
   an analyst judgment. This tool converts *structured* STIX; it does not read
